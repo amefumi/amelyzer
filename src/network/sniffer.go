@@ -85,7 +85,8 @@ func ListDeviceName() (networkDevices []NetworkDevice) {
 var err error
 var handle *pcap.Handle
 
-func PollPacket(c SnifferConfigure, itemsOut chan PacketItem) {
+func StartSniffer(c SnifferConfigure, itemsOut chan PacketItem, detailsOut chan PacketDetail) {
+	PacketNumber = 0 // PollPacket函数的重新运行表明重新开始嗅探过程，所以先对PacketNumber归零
 	handle, err = pcap.OpenLive(c.DeviceName, c.SnapshotLength, c.NicMix, c.Timeout)
 	if err != nil {
 		log.Fatal(err)
@@ -108,9 +109,8 @@ func PollPacket(c SnifferConfigure, itemsOut chan PacketItem) {
 			fmt.Println(packet)
 			items, detail := parsePacket(packet)
 			itemsOut <- items
-			mu.Lock()
-			PacketPool = append(PacketPool, detail)
-			mu.Unlock()
+			detailsOut <- detail
+			// 通过channel将解析后的数据结构传出
 		}
 	}
 }
@@ -118,8 +118,6 @@ func PollPacket(c SnifferConfigure, itemsOut chan PacketItem) {
 func StopSniffer() {
 	stop <- true
 }
-
-// GoPacket Layer包中预定义了对网络协议栈中多数协议的解析，考虑到任务的需求，这里不使用GoPacket Layer中定义的协议解析，而是调用其自定义层接口
 
 func parsePacket(packet gopacket.Packet) (item PacketItem, detail PacketDetail) {
 	// Layer 2: Ethernet or LoopBack
@@ -150,24 +148,65 @@ func parsePacket(packet gopacket.Packet) (item PacketItem, detail PacketDetail) 
 			detail.Layer2.Src = fmt.Sprintf("%s", ethernetPacket.SrcMAC)
 			detail.Layer2.Dst = fmt.Sprintf("%s", ethernetPacket.DstMAC)
 			detail.Layer2.Type = fmt.Sprintf("%s", ethernetPacket.EthernetType)
-			detail.Layer2.Info = "Ethernet, Src: " + detail.Layer2.Src + ", Dst: " + detail.Layer2.Dst
+			detail.Layer2.Info = fmt.Sprintf("Ethernet [%s], Src: %s, Dst: %s", ethernetPacket.EthernetType,
+				ethernetPacket.SrcMAC, ethernetPacket.DstMAC)
 			detail.Layer2.Protocol = detail.Layer2.Type
 			item.Source = detail.Layer2.Src
 			item.Target = detail.Layer2.Dst
 			item.Protocol = detail.Layer2.Type
-			item.InfoShort = detail.Layer2.Info
+			item.InfoShort = "[Ethernet] Src: " + detail.Layer2.Src + ", Dst: " + detail.Layer2.Dst
 
 			// Layer 3 Process
 			v4Layer := packet.Layer(layers.LayerTypeIPv4)
 			v6Layer := packet.Layer(layers.LayerTypeIPv6)
 			arpLayer := packet.Layer(layers.LayerTypeARP)
 			if v4Layer != nil {
-
+				v4Packet := v4Layer.(*layers.IPv4)
+				detail.Layer3.Protocol = "IPv4"
+				detail.Layer3.Src = fmt.Sprintf("%s", v4Packet.SrcIP)
+				detail.Layer3.Dst = fmt.Sprintf("%s", v4Packet.DstIP)
+				detail.Layer3.Version = fmt.Sprintf("%d", v4Packet.Version)
+				detail.Layer3.Info = fmt.Sprintf("Internet Protocol Version 4, Src: %s, Dst: %s\n\rVersion: 4\n\r"+
+					"Header Length: %d bytes\n\rType of Services: 0x%x\n\rTotol Length: %d\n\rIdentification: %d\n\r"+
+					"Flags: 0x%x\n\rFragment Offset: %d\n\rTime To Live: %d\n\rHeader Checksum:0x%x", v4Packet.SrcIP,
+					v4Packet.DstIP, v4Packet.IHL, v4Packet.TOS, v4Packet.Length, v4Packet.Id, v4Packet.Flags,
+					v4Packet.FragOffset, v4Packet.TTL, v4Packet.Checksum)
+				item.Source = detail.Layer3.Src
+				item.Target = detail.Layer3.Dst
+				item.Protocol = detail.Layer3.Protocol
+				item.InfoShort = fmt.Sprintf("Internet Protocol Version 4, Src: %s, Dst: %s", v4Packet.SrcIP,
+					v4Packet.DstIP)
 			} else if v6Layer != nil {
-
+				v6Packet := v6Layer.(*layers.IPv6)
+				detail.Layer3.Protocol = "IPv6"
+				detail.Layer3.Src = fmt.Sprintf("%s", v6Packet.SrcIP)
+				detail.Layer3.Dst = fmt.Sprintf("%s", v6Packet.DstIP)
+				detail.Layer3.Version = fmt.Sprintf("%d", v6Packet.Version)
+				detail.Layer3.Info = fmt.Sprintf("Inter Protocol Version 6, Src: %s, Dst: %s\n\rVersion: 6\n\r"+
+					"Traffic Class: 0x%x\n\rFlow Lable: 0x%x\n\rPayload Length: %d\n\rNextHeader: %s\n\r Hop Limit: %d",
+					v6Packet.SrcIP, v6Packet.DstIP, v6Packet.TrafficClass, v6Packet.FlowLabel, v6Packet.Length,
+					v6Packet.NextHeader, v6Packet.HopLimit)
+				item.Source = detail.Layer3.Src
+				item.Target = detail.Layer3.Dst
+				item.Protocol = detail.Layer3.Protocol
+				item.InfoShort = fmt.Sprintf("[IPv6] Src: %s Dst: %s", v6Packet.SrcIP, v6Packet.DstIP)
 			} else if arpLayer != nil {
+				arpPacket := arpLayer.(*layers.ARP)
+				detail.Layer3.Protocol = fmt.Sprintf("%s", arpPacket.Protocol)
+				detail.Layer3.Src = fmt.Sprintf("%s", arpPacket.SourceProtAddress)
+				detail.Layer3.Dst = fmt.Sprintf("%s", arpPacket.DstProtAddress)
+				detail.Layer3.Version = fmt.Sprintf("%d", arpPacket.Protocol)
+				detail.Layer3.Info = fmt.Sprintf("Address Resolution Protocol")
+				item.Source = detail.Layer3.Src
+				item.Target = detail.Layer3.Dst
+				item.Protocol = detail.Layer3.Protocol
+				item.InfoShort = fmt.Sprintf("Who has %s? Tell %s", arpPacket.SourceProtAddress, arpPacket.DstProtAddress)
 
 			} else {
+				// Unknown L3 Protocol
+			}
+			if v4Layer != nil || v6Layer != nil {
+				// Layer 4 Based on IP
 
 			}
 
@@ -212,10 +251,4 @@ func parsePacket(packet gopacket.Packet) (item PacketItem, detail PacketDetail) 
 		fmt.Println("Error decoding some part of the packet:", err)
 	}
 	return item, detail
-}
-
-func GetDetailPacket(packetNumber int) (detail PacketDetail) {
-	mu.RLock()
-	defer mu.RUnlock()
-	return PacketPool[packetNumber-1]
 }
