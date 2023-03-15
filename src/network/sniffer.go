@@ -56,6 +56,8 @@ type PacketDetail struct {
 	Layer4 struct {
 		// TCP UPD ICMP
 		Protocol string
+		SrcPort  uint16
+		DstPort  uint16
 		Info     string
 	}
 	Layer5 struct {
@@ -106,7 +108,6 @@ func StartSniffer(c SnifferConfigure, itemsOut chan PacketItem, detailsOut chan 
 		case <-stop:
 			return
 		case packet = <-in:
-			fmt.Println(packet)
 			items, detail := parsePacket(packet)
 			itemsOut <- items
 			detailsOut <- detail
@@ -212,6 +213,8 @@ func parsePacket(packet gopacket.Packet) (item PacketItem, detail PacketDetail) 
 				// Layer 4 Based on IP
 				tcpLayer := packet.Layer(layers.LayerTypeTCP)
 				udpLayer := packet.Layer(layers.LayerTypeUDP)
+				//icmpv4Layer := packet.Layer(layers.LayerTypeICMPv4)
+				icmpv6layer := packet.Layer(layers.LayerTypeICMPv6)
 				if tcpLayer != nil {
 					tcpPacket := tcpLayer.(*layers.TCP)
 					detail.Layer4.Protocol = "TCP"
@@ -228,19 +231,36 @@ func parsePacket(packet gopacket.Packet) (item PacketItem, detail PacketDetail) 
 					if tcpPacket.RST {
 						tcpFlagString += "RST,"
 					}
-					detail.Layer4.Info = fmt.Sprintf("")
 					item.Protocol = "TCP"
 					item.InfoShort = fmt.Sprintf("%d -> %d Seq=%d [%s] Ack=%d Win=%d", tcpPacket.SrcPort,
-						tcpPacket.DstPort, tcpFlagString, tcpPacket.Seq, tcpPacket.Ack, tcpPacket.Window)
+						tcpPacket.DstPort, tcpPacket.Seq, tcpFlagString, tcpPacket.Ack, tcpPacket.Window)
+					detail.Layer4.Info = fmt.Sprintf("Transmission Control Protocol, %s\n\r Checksum: 0x%x",
+						item.InfoShort, tcpPacket.Checksum)
+					detail.Layer4.SrcPort = uint16(tcpPacket.SrcPort)
+					detail.Layer4.DstPort = uint16(tcpPacket.DstPort)
 				} else if udpLayer != nil {
 					udpPacket := udpLayer.(*layers.UDP)
 					detail.Layer4.Protocol = "UDP"
-					detail.Layer4.Info = fmt.Sprintf()
 					item.Protocol = "UDP"
 					item.InfoShort = fmt.Sprintf("%d -> %d, Len=%d", udpPacket.SrcPort, udpPacket.DstPort, udpPacket.Length)
+					detail.Layer4.Info = fmt.Sprintf("User Datagram Protocol, %s\n\rLength: %d\n\rChecksum: 0x%x",
+						item.InfoShort, udpPacket.Length, udpPacket.Checksum)
+					detail.Layer4.SrcPort = uint16(udpPacket.SrcPort)
+					detail.Layer4.DstPort = uint16(udpPacket.DstPort)
+					//} else if icmpv4Layer != nil {
+					//	icmpv4Packet := icmpv4Layer.(*layers.ICMPv4)
+					//	item.Protocol = "ICMPv4"
+					//	item.InfoShort =
+				} else if icmpv6layer != nil {
+
 				} else {
-					// Unknown L4 Protocol
+					// Other Layer 4 Protocol: return directly.
+					return item, detail
 				}
+				// Layer 5 Based on TCP/UDP
+				//DNSPacket := packet.Layer(layers.LayerTypeDNS)
+				//TLSPacket := packet.Layer(layers.LayerTypeTLS)
+
 			}
 
 		}

@@ -18,16 +18,18 @@ func main() {
 		Timeout:        -1,
 		BPFFilter:      "udp",
 	}
-	stopChan := make(chan bool)
 	itemChan := make(chan Amelyzer.PacketItem)
-	go Amelyzer.PollPacket(configure, stopChan, itemChan)
-	fmt.Println("Go to PollPacket Routine Successfully.")
-	time.Sleep(5 * time.Second)
-	Amelyzer.StopSniffer(stopChan)
-	////	done <- true
-	////}()
-	////select {
-	////case <-done:
-	////	fmt.Println("Exit！")
-	////}
+	detailChan := make(chan Amelyzer.PacketDetail)
+	go Amelyzer.StartSniffer(configure, itemChan, detailChan)
+	for {
+		var item Amelyzer.PacketItem
+		var detail Amelyzer.PacketDetail
+		select {
+		case item = <-itemChan:
+			fmt.Print(item.InfoShort)
+		case detail = <-detailChan:
+			fmt.Println(detail.Layer4.Info)
+			//	fmt.Print(detail)
+		}
+	}
 }
