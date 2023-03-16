@@ -62,7 +62,7 @@ type PacketDetail struct {
 	Layer5 struct {
 		Protocol string
 	}
-	dump gopacket.Packet
+	Dump gopacket.Packet
 }
 
 var PacketNumber = 0
@@ -117,7 +117,7 @@ func parsePacket(packet gopacket.Packet) (item PacketItem, detail PacketDetail) 
 	item.Number = PacketNumber
 	item.Time = time.Now().Format("15:04:05.000")
 	item.Length = packet.Metadata().Length
-	detail.dump = packet
+	detail.Dump = packet
 	detail.Number = PacketNumber
 	detail.Time = item.Time
 

@@ -116,6 +116,7 @@ func StopSniffer(stopSignal chan bool) {
 func MakeUI() error {
 	var inBPFFilter *walk.LineEdit
 	var outPacketDetailLabel *walk.Label
+	var outPacketDumpText *walk.TextEdit
 	var runningStateLineEdit *walk.LineEdit
 	var PacketItemTableView *walk.TableView
 	var startPushBotton *walk.PushButton
@@ -249,13 +250,44 @@ func MakeUI() error {
 							var detailString = currentDetail.Layer2.Info + "\n" + currentDetail.Layer3.Info + "\n" +
 								currentDetail.Layer4.Info
 							outPacketDetailLabel.SetText(detailString)
+							var payloadBytes []byte
+							var dumpString string
+							if currentDetail.Layer5.Protocol != "" {
+								payloadBytes = currentDetail.Dump.ApplicationLayer().LayerPayload()
+								dumpString = "[Application Layer Payload] = "
+							} else if currentDetail.Layer4.Protocol != "" {
+								payloadBytes = currentDetail.Dump.TransportLayer().LayerPayload()
+								dumpString = "[Transport Layer Payload] = "
+							} else if currentDetail.Layer3.Protocol != "" {
+								payloadBytes = currentDetail.Dump.NetworkLayer().LayerPayload()
+								dumpString = "[Network Layer Payload] = "
+							} else {
+								payloadBytes = currentDetail.Dump.LinkLayer().LayerPayload()
+								dumpString = "[Link Layer Payload] = "
+							}
+							for i, v := range payloadBytes {
+								if v > 126 || v < 32 {
+									payloadBytes[i] = '.'
+								}
+							}
+							dumpString += string(payloadBytes)
+
+							outPacketDumpText.SetText(dumpString)
 						},
 					},
-
-					Label{
-						Name:     "Packet Detail",
-						AssignTo: &outPacketDetailLabel,
-						Text:     "Packet Details",
+					VSplitter{
+						Children: []Widget{
+							Label{
+								Name:     "Packet Detail",
+								AssignTo: &outPacketDetailLabel,
+								Text:     "Packet Details",
+							},
+							TextEdit{
+								Name:     "Packet Dump",
+								AssignTo: &outPacketDumpText,
+								Text:     "Packet Dump",
+							},
+						},
 					},
 				},
 			},
