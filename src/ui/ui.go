@@ -2,6 +2,7 @@ package ui
 
 import (
 	Amelyzer "Amelyzer/src/network"
+	"fmt"
 	"github.com/lxn/walk"
 	. "github.com/lxn/walk/declarative"
 	"sort"
@@ -106,7 +107,6 @@ func StartSniffer(m *PacketItemModel, stopSignal chan bool, deviceName string, B
 			PacketDetailPool = append(PacketDetailPool, detailIn)
 		}
 	}
-	m.PublishRowsReset()
 }
 
 func StopSniffer(stopSignal chan bool) {
@@ -117,10 +117,15 @@ func MakeUI() error {
 	var inBPFFilter *walk.LineEdit
 	var outPacketDetailLabel *walk.Label
 	var outPacketDumpText *walk.TextEdit
+	var outPacketBytesText *walk.TextEdit
 	var runningStateLineEdit *walk.LineEdit
 	var PacketItemTableView *walk.TableView
-	var startPushBotton *walk.PushButton
-	var stopPushBotton *walk.PushButton
+	var startPushButton *walk.PushButton
+	var stopPushButton *walk.PushButton
+	var setBPFFilterButton *walk.PushButton
+	var setQuickFilterButton *walk.PushButton
+	var analyzeButton *walk.PushButton
+
 	var devicesComboBox *walk.ComboBox
 
 	var GlobalPacketItemModel = new(PacketItemModel)
@@ -128,7 +133,7 @@ func MakeUI() error {
 	GlobalPacketItemModel.PublishRowsReset()
 
 	var stopSnifferSignal = make(chan bool)
-	var BPFFilter string = ""
+	var BPFFilter = ""
 
 	var devices = Amelyzer.ListDeviceName()
 	var devicesName = make(map[string]string)
@@ -161,12 +166,14 @@ func MakeUI() error {
 										Text:     "Not Running!",
 										Enabled:  false,
 									},
+									Label{Text: "Device:"},
 									ComboBox{
 										AssignTo: &devicesComboBox,
 										Name:     "DevicesComboBox",
 										Editable: false,
 										Model:    devicesDescription,
 									},
+									HSpacer{},
 								},
 							},
 							HSplitter{
@@ -182,13 +189,19 @@ func MakeUI() error {
 								},
 							},
 							PushButton{
-								AssignTo: &startPushBotton,
+								AssignTo: &startPushButton,
 								Name:     "Start",
 								Text:     "Start",
 								OnClicked: func() {
-									runningStateLineEdit.SetText("Sniffing...")
-									startPushBotton.SetEnabled(false)
-									stopPushBotton.SetEnabled(true)
+									err := runningStateLineEdit.SetText("Sniffing...")
+									if err != nil {
+										return
+									}
+									startPushButton.SetEnabled(false)
+									stopPushButton.SetEnabled(true)
+									setBPFFilterButton.SetEnabled(false)
+									setQuickFilterButton.SetEnabled(false)
+									analyzeButton.SetEnabled(false)
 									var deviceName string
 									if devicesComboBox.Text() == "" {
 										deviceName = devicesName[devicesDescription[0]]
@@ -199,12 +212,23 @@ func MakeUI() error {
 									go StartSniffer(GlobalPacketItemModel, stopSnifferSignal, deviceName, BPFFilter)
 								},
 							},
-							PushButton{AssignTo: &stopPushBotton, Name: "Stop", Text: "Stop", OnClicked: func() {
-								go StopSniffer(stopSnifferSignal)
-								runningStateLineEdit.SetText("Stopped...")
-								startPushBotton.SetEnabled(true)
-								stopPushBotton.SetEnabled(false)
-							}},
+							PushButton{
+								AssignTo: &stopPushButton,
+								Name:     "Stop",
+								Text:     "Stop",
+								OnClicked: func() {
+									go StopSniffer(stopSnifferSignal)
+									err := runningStateLineEdit.SetText("Stopped...")
+									if err != nil {
+										return
+									}
+									startPushButton.SetEnabled(true)
+									stopPushButton.SetEnabled(false)
+									setBPFFilterButton.SetEnabled(true)
+									setQuickFilterButton.SetEnabled(true)
+									analyzeButton.SetEnabled(true)
+								},
+							},
 						},
 					},
 					VSplitter{
@@ -214,80 +238,104 @@ func MakeUI() error {
 								Text:    "Choose Function",
 								Enabled: false,
 							},
-							PushButton{Name: "ApplyBPFFilter", Text: "Apply BPF Filter", OnClicked: func() {
-								BPFFilter = inBPFFilter.Text()
-							}},
-							PushButton{Name: "QuickFiter", Text: "Quick Filter"},
-							PushButton{Name: "Analyzer", Text: "Analyze Selected Packet"},
+							PushButton{
+								Name:     "ApplyBPFFilter",
+								AssignTo: &setBPFFilterButton,
+								Text:     "Apply BPF Filter",
+								OnClicked: func() {
+									BPFFilter = inBPFFilter.Text()
+								},
+							},
+							PushButton{
+								Name:     "QuickFilter",
+								AssignTo: &setQuickFilterButton,
+								Text:     "Quick Filter",
+							},
+							PushButton{
+								Name:     "Analyzer",
+								AssignTo: &analyzeButton,
+								Text:     "Analyze Selected Packet",
+							},
 						},
 					},
 				},
 			},
-			VSplitter{
-				MinSize: Size{Height: 760},
+			TableView{
+				AssignTo:         &PacketItemTableView,
+				Name:             "tableView", // Name is needed for settings persistence
+				AlternatingRowBG: true,
+				ColumnsOrderable: true,
+				Columns: []TableViewColumn{
+					// Name is needed for settings persistence
+					{Name: "Number", DataMember: "No."}, // Use DataMember, if names differ
+					{Name: "Time"},
+					{Name: "Length"},
+					//MinSize: Size{Height: 760},
+					{Name: "Source"},
+					{Name: "Target"},
+					{Name: "Protocol"},
+					{Name: "InfoShort"},
+				},
+				Model: GlobalPacketItemModel,
+				OnItemActivated: func() {
+					// Item的双击事件
+					var currentIndex = PacketItemTableView.CurrentIndex()
+					var itemNumber = GlobalPacketItemModel.items[currentIndex].Number
+					var currentDetail = PacketDetailPool[itemNumber-1]
+					var detailString = currentDetail.Layer2.Info + "\n" + currentDetail.Layer3.Info + "\n" +
+						currentDetail.Layer4.Info + "\n" + currentDetail.Layer5.Info
+					err := outPacketDetailLabel.SetText(detailString)
+					if err != nil {
+						return
+					}
+					var payloadBytes []byte
+					var dumpString = ""
+					if currentDetail.Layer4.Protocol == "UDP" || currentDetail.Layer4.Protocol == "TCP" {
+						payloadBytes = currentDetail.Dump.TransportLayer().LayerPayload()
+						dumpString = "[Transport Layer Payload] = "
+					} else if currentDetail.Layer3.Protocol != "" && currentDetail.Layer3.Protocol != "ARP" {
+						payloadBytes = currentDetail.Dump.NetworkLayer().LayerPayload()
+						dumpString = "[Network Layer Payload] = "
+					} else {
+						payloadBytes = currentDetail.Dump.LinkLayer().LayerPayload()
+						dumpString = "[Link Layer Payload] = "
+					}
+					for i, v := range payloadBytes {
+						if v > 126 || v < 32 {
+							payloadBytes[i] = '.'
+						}
+					}
+					if len(payloadBytes) != 0 {
+						dumpString += string(payloadBytes)
+					}
+					err = outPacketBytesText.SetText(fmt.Sprint(currentDetail.Dump.Data()))
+					if err != nil {
+						return
+					}
+					err = outPacketDumpText.SetText(dumpString)
+					if err != nil {
+						return
+					}
+				},
+			},
+			Label{
+				Name:     "Packet Detail",
+				AssignTo: &outPacketDetailLabel,
+				Text:     "Packet Details",
+			},
+			HSplitter{
 				Children: []Widget{
-					TableView{
-						AssignTo:         &PacketItemTableView,
-						Name:             "tableView", // Name is needed for settings persistence
-						AlternatingRowBG: true,
-						ColumnsOrderable: true,
-						Columns: []TableViewColumn{
-							// Name is needed for settings persistence
-							{Name: "Number", DataMember: "No."}, // Use DataMember, if names differ
-							{Name: "Time"},
-							{Name: "Length"},
-							{Name: "Source"},
-							{Name: "Target"},
-							{Name: "Protocol"},
-							{Name: "InfoShort"},
-						},
-						Model: GlobalPacketItemModel,
-						OnItemActivated: func() {
-							// Item的双击事件
-							var currentIndex = PacketItemTableView.CurrentIndex()
-							var itemNumber = GlobalPacketItemModel.items[currentIndex].Number
-							var currentDetail = PacketDetailPool[itemNumber-1]
-							var detailString = currentDetail.Layer2.Info + "\n" + currentDetail.Layer3.Info + "\n" +
-								currentDetail.Layer4.Info
-							outPacketDetailLabel.SetText(detailString)
-							var payloadBytes []byte
-							var dumpString string
-							if currentDetail.Layer5.Protocol != "" {
-								payloadBytes = currentDetail.Dump.ApplicationLayer().LayerPayload()
-								dumpString = "[Application Layer Payload] = "
-							} else if currentDetail.Layer4.Protocol != "" {
-								payloadBytes = currentDetail.Dump.TransportLayer().LayerPayload()
-								dumpString = "[Transport Layer Payload] = "
-							} else if currentDetail.Layer3.Protocol != "" {
-								payloadBytes = currentDetail.Dump.NetworkLayer().LayerPayload()
-								dumpString = "[Network Layer Payload] = "
-							} else {
-								payloadBytes = currentDetail.Dump.LinkLayer().LayerPayload()
-								dumpString = "[Link Layer Payload] = "
-							}
-							for i, v := range payloadBytes {
-								if v > 126 || v < 32 {
-									payloadBytes[i] = '.'
-								}
-							}
-							dumpString += string(payloadBytes)
-
-							outPacketDumpText.SetText(dumpString)
-						},
+					TextEdit{
+						Name:     "Packet Dump",
+						AssignTo: &outPacketDumpText,
+						Text:     "Packet Dump",
+						VScroll:  true,
 					},
-					VSplitter{
-						Children: []Widget{
-							Label{
-								Name:     "Packet Detail",
-								AssignTo: &outPacketDetailLabel,
-								Text:     "Packet Details",
-							},
-							TextEdit{
-								Name:     "Packet Dump",
-								AssignTo: &outPacketDumpText,
-								Text:     "Packet Dump",
-							},
-						},
+					TextEdit{
+						Name:     "Packet Bytes",
+						AssignTo: &outPacketBytesText,
+						Text:     "Packet Bytes",
+						VScroll:  true,
 					},
 				},
 			},

@@ -6,6 +6,7 @@ import (
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
 	"log"
+	"strconv"
 	"time"
 )
 
@@ -61,6 +62,7 @@ type PacketDetail struct {
 	}
 	Layer5 struct {
 		Protocol string
+		Info     string
 	}
 	Dump gopacket.Packet
 }
@@ -91,7 +93,10 @@ func StartSniffer(c SnifferConfigure, itemsOut chan PacketItem, detailsOut chan 
 	if c.BPFFilter != "" {
 		err = handle.SetBPFFilter(c.BPFFilter)
 		if err != nil {
-			log.Fatal(err)
+			err := handle.SetBPFFilter("") // 不符合BPFFilter时候用空
+			if err != nil {
+				return
+			}
 		}
 	}
 	defer handle.Close()
@@ -188,15 +193,21 @@ func parsePacket(packet gopacket.Packet) (item PacketItem, detail PacketDetail) 
 				detail.Layer3.Protocol = "ARP"
 				detail.Layer3.Src = fmt.Sprint(arpPacket.SourceProtAddress)
 				detail.Layer3.Dst = fmt.Sprint(arpPacket.DstProtAddress)
-				detail.Layer3.Version = fmt.Sprintf("%d", arpPacket.Protocol)
+				detail.Layer3.Version = fmt.Sprint(arpPacket.Protocol)
 				detail.Layer3.Info = fmt.Sprintf("Address Resolution Protocol\n\tProtocol type: %s\n\tOpcode:%d\n\t"+
 					"Sender MAC address: %s\n\tSender IP address: %s\n\tTarget MAC address: %s\n\tTarget IP address: %s",
-					arpPacket.Protocol, arpPacket.Operation, arpPacket.SourceHwAddress, arpPacket.SourceProtAddress,
-					arpPacket.DstHwAddress, arpPacket.DstProtAddress)
+					fmt.Sprint(arpPacket.Protocol), arpPacket.Operation, fmt.Sprint(arpPacket.SourceHwAddress), detail.Layer3.Src,
+					fmt.Sprint(arpPacket.DstHwAddress), detail.Layer3.Dst)
 				item.Source = detail.Layer3.Src
 				item.Target = detail.Layer3.Dst
 				item.Protocol = detail.Layer3.Protocol
-				item.InfoShort = fmt.Sprint("Who has ", arpPacket.SourceProtAddress, "Tell", arpPacket.DstProtAddress)
+				if arpPacket.Operation == 1 {
+					item.InfoShort = fmt.Sprint("Request: Who has ", arpPacket.SourceProtAddress, "Tell", arpPacket.DstProtAddress)
+				} else if arpPacket.Operation == 2 {
+					item.InfoShort = fmt.Sprint("Reply: ", arpPacket.SourceProtAddress, "is at", arpPacket.SourceHwAddress)
+				} else {
+					item.InfoShort = "ARP Opcode " + strconv.Itoa(int(arpPacket.Operation))
+				}
 
 			} else {
 				// Unknown L3 Protocol
@@ -205,7 +216,7 @@ func parsePacket(packet gopacket.Packet) (item PacketItem, detail PacketDetail) 
 				// Layer 4 Based on IP
 				tcpLayer := packet.Layer(layers.LayerTypeTCP)
 				udpLayer := packet.Layer(layers.LayerTypeUDP)
-				//icmpv4Layer := packet.Layer(layers.LayerTypeICMPv4)
+				icmpv4Layer := packet.Layer(layers.LayerTypeICMPv4)
 				icmpv6layer := packet.Layer(layers.LayerTypeICMPv6)
 				if tcpLayer != nil {
 					tcpPacket := tcpLayer.(*layers.TCP)
@@ -239,19 +250,71 @@ func parsePacket(packet gopacket.Packet) (item PacketItem, detail PacketDetail) 
 						item.InfoShort, udpPacket.Length, udpPacket.Checksum)
 					detail.Layer4.SrcPort = uint16(udpPacket.SrcPort)
 					detail.Layer4.DstPort = uint16(udpPacket.DstPort)
-					//} else if icmpv4Layer != nil {
-					//	icmpv4Packet := icmpv4Layer.(*layers.ICMPv4)
-					//	item.Protocol = "ICMPv4"
-					//	item.InfoShort =
+				} else if icmpv4Layer != nil {
+					icmpv4Packet := icmpv4Layer.(*layers.ICMPv4)
+					item.Protocol = "ICMPv4"
+					item.InfoShort = "TypeCode: " + icmpv4Packet.TypeCode.String()
+					detail.Layer4.Protocol = "ICMPv4"
+					detail.Layer4.Info = "Internet Control Message Protocol"
+					if icmpv4Packet.TypeCode.Type() == 8 {
+						item.InfoShort += "Ping Request"
+						detail.Layer4.Info += ", Ping Request"
+					} else if icmpv4Packet.TypeCode.Type() == 0 {
+						item.InfoShort += "Ping Reply"
+						detail.Layer4.Info += ", Ping Reply"
+					}
+					detail.Layer4.Info += fmt.Sprintf("\n\tTypeCode: %s\n\tID: %d\n\tSeq: %d", icmpv4Packet.TypeCode.String(),
+						icmpv4Packet.Id, icmpv4Packet.Seq)
 				} else if icmpv6layer != nil {
+					icmpv6Packet := icmpv6layer.(*layers.ICMPv6)
+					item.Protocol = "ICMPv6"
+					item.InfoShort = "TypeCode: " + icmpv6Packet.TypeCode.String()
+					detail.Layer4.Protocol = "ICMPv6"
+					detail.Layer4.Info = "Internet Control Message Protocol Version 6"
+					if icmpv6Packet.TypeCode.Type() == 8 {
+						item.InfoShort = "Ping Request"
+						detail.Layer4.Info += ", Ping Request"
+					} else if icmpv6Packet.TypeCode.Type() == 0 {
+						item.InfoShort = "Ping Reply"
+						detail.Layer4.Info += ", Ping Reply"
+					}
+					detail.Layer4.Info += "\n\tTypeCode: " + icmpv6Packet.TypeCode.String()
 				} else {
 					// Other Layer 4 Protocol: return directly.
 					//return item, detail
 				}
 				// Layer 5 Based on TCP/UDP
-				//DNSPacket := packet.Layer(layers.LayerTypeDNS)
-				//TLSPacket := packet.Layer(layers.LayerTypeTLS)
 
+				DNSLayer := packet.Layer(layers.LayerTypeDNS)
+				// Check if HTTP\QUIC
+				if tcpLayer != nil && tcpLayer.(*layers.TCP).DstPort == layers.TCPPort(80) {
+					// HTTP Request
+					item.Protocol = "HTTP"
+					item.InfoShort = "HTTP Request: " + item.InfoShort
+					detail.Layer5.Protocol = "HTTP"
+				} else if tcpLayer != nil && tcpLayer.(*layers.TCP).DstPort == layers.TCPPort(443) {
+					item.Protocol = "TLS"
+					item.InfoShort = "TLS Request: " + item.InfoShort
+					detail.Layer5.Protocol = "TLS"
+				} else if udpLayer != nil && udpLayer.(*layers.UDP).DstPort == layers.UDPPort(443) {
+					// QUIC = UDP 443
+					item.Protocol = "QUIC"
+					item.InfoShort = "QUIC Request: " + item.InfoShort
+					detail.Layer5.Protocol = "QUIC"
+				} else if DNSLayer != nil {
+					DNSPacket := DNSLayer.(*layers.DNS)
+					item.Protocol = "DNS"
+					item.InfoShort = "DNS: " + item.InfoShort
+					detail.Layer5.Protocol = "DNS"
+					detail.Layer5.Info = fmt.Sprintf("Domain Name Server, ID:%d\n\tAnswer Numbers: %d\n\tQuery Request: %t"+
+						"\n\t Queries: %s", DNSPacket.ID, DNSPacket.ANCount, DNSPacket.QR,
+						string(DNSPacket.Questions[0].Name))
+					for _, v := range DNSPacket.Answers {
+						detail.Layer5.Info += "\n\tAnswers: " + v.String()
+					}
+				} else {
+
+				}
 			}
 
 		}
