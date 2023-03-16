@@ -6,7 +6,6 @@ import (
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
 	"log"
-	"sync"
 	"time"
 )
 
@@ -26,10 +25,10 @@ type SnifferConfigure struct {
 type PacketItem struct {
 	Number    int
 	Time      string
-	Length    int
 	Source    string
 	Target    string
 	Protocol  string
+	Length    int
 	InfoShort string
 }
 
@@ -68,10 +67,6 @@ type PacketDetail struct {
 
 var PacketNumber = 0
 
-var PacketPool []PacketDetail
-var mu sync.RWMutex
-var stop = make(chan bool)
-
 func ListDeviceName() (networkDevices []NetworkDevice) {
 	// 输出网络设备的名称（用于抓包）和描述（用于展示给用户）
 	devices, err := pcap.FindAllDevs()
@@ -87,7 +82,7 @@ func ListDeviceName() (networkDevices []NetworkDevice) {
 var err error
 var handle *pcap.Handle
 
-func StartSniffer(c SnifferConfigure, itemsOut chan PacketItem, detailsOut chan PacketDetail) {
+func StartSniffer(c SnifferConfigure, itemsOut chan PacketItem, detailsOut chan PacketDetail, stop chan bool) {
 	PacketNumber = 0 // PollPacket函数的重新运行表明重新开始嗅探过程，所以先对PacketNumber归零
 	handle, err = pcap.OpenLive(c.DeviceName, c.SnapshotLength, c.NicMix, c.Timeout)
 	if err != nil {
@@ -108,16 +103,13 @@ func StartSniffer(c SnifferConfigure, itemsOut chan PacketItem, detailsOut chan 
 		case <-stop:
 			return
 		case packet = <-in:
+			PacketNumber += 1
 			items, detail := parsePacket(packet)
 			itemsOut <- items
 			detailsOut <- detail
 			// 通过channel将解析后的数据结构传出
 		}
 	}
-}
-
-func StopSniffer() {
-	stop <- true
 }
 
 func parsePacket(packet gopacket.Packet) (item PacketItem, detail PacketDetail) {
@@ -167,13 +159,13 @@ func parsePacket(packet gopacket.Packet) (item PacketItem, detail PacketDetail) 
 				detail.Layer3.Src = fmt.Sprintf("%s", v4Packet.SrcIP)
 				detail.Layer3.Dst = fmt.Sprintf("%s", v4Packet.DstIP)
 				detail.Layer3.Version = fmt.Sprintf("%d", v4Packet.Version)
-				detail.Layer3.Info = fmt.Sprintf("Internet Protocol Version 4, Src: %s, Dst: %s\n\rVersion: 4\n\r"+
-					"Header Length: %d bytes\n\rType of Services: 0x%x\n\rTotol Length: %d\n\rIdentification: %d\n\r"+
-					"Flags: 0x%x\n\rFragment Offset: %d\n\rTime To Live: %d\n\rHeader Checksum:0x%x", v4Packet.SrcIP,
+				detail.Layer3.Info = fmt.Sprintf("Internet Protocol Version 4, Src: %s, Dst: %s\n\tVersion: 4\n\t"+
+					"Header Length: %d bytes\n\tType of Services: 0x%x\n\tTotol Length: %d\n\tIdentification: %d\n\t"+
+					"Flags: 0x%x\n\tFragment Offset: %d\n\tTime To Live: %d\n\tHeader Checksum:0x%x", v4Packet.SrcIP,
 					v4Packet.DstIP, v4Packet.IHL, v4Packet.TOS, v4Packet.Length, v4Packet.Id, v4Packet.Flags,
 					v4Packet.FragOffset, v4Packet.TTL, v4Packet.Checksum)
-				item.Source = detail.Layer3.Src
-				item.Target = detail.Layer3.Dst
+				item.Source = fmt.Sprintf("%s", v4Packet.SrcIP)
+				item.Target = fmt.Sprintf("%s", v4Packet.DstIP)
 				item.Protocol = detail.Layer3.Protocol
 				item.InfoShort = fmt.Sprintf("Internet Protocol Version 4, Src: %s, Dst: %s", v4Packet.SrcIP,
 					v4Packet.DstIP)
@@ -183,8 +175,8 @@ func parsePacket(packet gopacket.Packet) (item PacketItem, detail PacketDetail) 
 				detail.Layer3.Src = fmt.Sprintf("%s", v6Packet.SrcIP)
 				detail.Layer3.Dst = fmt.Sprintf("%s", v6Packet.DstIP)
 				detail.Layer3.Version = fmt.Sprintf("%d", v6Packet.Version)
-				detail.Layer3.Info = fmt.Sprintf("Inter Protocol Version 6, Src: %s, Dst: %s\n\rVersion: 6\n\r"+
-					"Traffic Class: 0x%x\n\rFlow Lable: 0x%x\n\rPayload Length: %d\n\rNextHeader: %s\n\r Hop Limit: %d",
+				detail.Layer3.Info = fmt.Sprintf("Inter Protocol Version 6, Src: %s, Dst: %s\n\tVersion: 6\n\t"+
+					"Traffic Class: 0x%x\n\tFlow Lable: 0x%x\n\tPayload Length: %d\n\tNextHeader: %s\n\t Hop Limit: %d",
 					v6Packet.SrcIP, v6Packet.DstIP, v6Packet.TrafficClass, v6Packet.FlowLabel, v6Packet.Length,
 					v6Packet.NextHeader, v6Packet.HopLimit)
 				item.Source = detail.Layer3.Src
@@ -193,18 +185,18 @@ func parsePacket(packet gopacket.Packet) (item PacketItem, detail PacketDetail) 
 				item.InfoShort = fmt.Sprintf("[IPv6] Src: %s Dst: %s", v6Packet.SrcIP, v6Packet.DstIP)
 			} else if arpLayer != nil {
 				arpPacket := arpLayer.(*layers.ARP)
-				detail.Layer3.Protocol = fmt.Sprintf("%s", arpPacket.Protocol)
-				detail.Layer3.Src = fmt.Sprintf("%s", arpPacket.SourceProtAddress)
-				detail.Layer3.Dst = fmt.Sprintf("%s", arpPacket.DstProtAddress)
+				detail.Layer3.Protocol = "ARP"
+				detail.Layer3.Src = fmt.Sprint(arpPacket.SourceProtAddress)
+				detail.Layer3.Dst = fmt.Sprint(arpPacket.DstProtAddress)
 				detail.Layer3.Version = fmt.Sprintf("%d", arpPacket.Protocol)
-				detail.Layer3.Info = fmt.Sprintf("Address Resolution Protocol\n\rProtocol type: %s\n\rOpcode:%d\n\r"+
-					"Sender MAC address: %s\n\rSender IP address: %s\n\rTarget MAC address: %s\n\rTarget IP address: %s",
+				detail.Layer3.Info = fmt.Sprintf("Address Resolution Protocol\n\tProtocol type: %s\n\tOpcode:%d\n\t"+
+					"Sender MAC address: %s\n\tSender IP address: %s\n\tTarget MAC address: %s\n\tTarget IP address: %s",
 					arpPacket.Protocol, arpPacket.Operation, arpPacket.SourceHwAddress, arpPacket.SourceProtAddress,
 					arpPacket.DstHwAddress, arpPacket.DstProtAddress)
 				item.Source = detail.Layer3.Src
 				item.Target = detail.Layer3.Dst
 				item.Protocol = detail.Layer3.Protocol
-				item.InfoShort = fmt.Sprintf("Who has %s? Tell %s", arpPacket.SourceProtAddress, arpPacket.DstProtAddress)
+				item.InfoShort = fmt.Sprint("Who has ", arpPacket.SourceProtAddress, "Tell", arpPacket.DstProtAddress)
 
 			} else {
 				// Unknown L3 Protocol
@@ -234,7 +226,7 @@ func parsePacket(packet gopacket.Packet) (item PacketItem, detail PacketDetail) 
 					item.Protocol = "TCP"
 					item.InfoShort = fmt.Sprintf("%d -> %d Seq=%d [%s] Ack=%d Win=%d", tcpPacket.SrcPort,
 						tcpPacket.DstPort, tcpPacket.Seq, tcpFlagString, tcpPacket.Ack, tcpPacket.Window)
-					detail.Layer4.Info = fmt.Sprintf("Transmission Control Protocol, %s\n\r Checksum: 0x%x",
+					detail.Layer4.Info = fmt.Sprintf("Transmission Control Protocol, %s\n\t Checksum: 0x%x",
 						item.InfoShort, tcpPacket.Checksum)
 					detail.Layer4.SrcPort = uint16(tcpPacket.SrcPort)
 					detail.Layer4.DstPort = uint16(tcpPacket.DstPort)
@@ -243,7 +235,7 @@ func parsePacket(packet gopacket.Packet) (item PacketItem, detail PacketDetail) 
 					detail.Layer4.Protocol = "UDP"
 					item.Protocol = "UDP"
 					item.InfoShort = fmt.Sprintf("%d -> %d, Len=%d", udpPacket.SrcPort, udpPacket.DstPort, udpPacket.Length)
-					detail.Layer4.Info = fmt.Sprintf("User Datagram Protocol, %s\n\rLength: %d\n\rChecksum: 0x%x",
+					detail.Layer4.Info = fmt.Sprintf("User Datagram Protocol, %s\n\tLength: %d\n\tChecksum: 0x%x",
 						item.InfoShort, udpPacket.Length, udpPacket.Checksum)
 					detail.Layer4.SrcPort = uint16(udpPacket.SrcPort)
 					detail.Layer4.DstPort = uint16(udpPacket.DstPort)
@@ -252,10 +244,9 @@ func parsePacket(packet gopacket.Packet) (item PacketItem, detail PacketDetail) 
 					//	item.Protocol = "ICMPv4"
 					//	item.InfoShort =
 				} else if icmpv6layer != nil {
-
 				} else {
 					// Other Layer 4 Protocol: return directly.
-					return item, detail
+					//return item, detail
 				}
 				// Layer 5 Based on TCP/UDP
 				//DNSPacket := packet.Layer(layers.LayerTypeDNS)

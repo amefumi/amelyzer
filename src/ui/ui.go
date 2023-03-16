@@ -15,6 +15,9 @@ type PacketItemModel struct {
 	items      []*Amelyzer.PacketItem
 }
 
+var PacketDetailPool []Amelyzer.PacketDetail
+var PacketItemPool []Amelyzer.PacketItem
+
 // RowCount Called by the TableView from SetModel and every time the model publishes a RowsReset event.
 func (m *PacketItemModel) RowCount() int {
 	return len(m.items)
@@ -76,12 +79,34 @@ func (m *PacketItemModel) Sort(col int, order walk.SortOrder) error {
 	return m.SorterBase.Sort(col, order)
 }
 
-func StartSniffer(m *PacketItemModel, stopSignal chan bool) {
-	// Clean existing content
+func StartSniffer(m *PacketItemModel, stopSignal chan bool, deviceName string, BPFFilter string) {
+	PacketDetailPool = make([]Amelyzer.PacketDetail, 0)
+	PacketItemPool = make([]Amelyzer.PacketItem, 0)
 	m.items = make([]*Amelyzer.PacketItem, 0)
 	m.PublishRowsReset()
-	//
-
+	var itemsIn = make(chan Amelyzer.PacketItem)
+	var detailsIn = make(chan Amelyzer.PacketDetail)
+	configure := Amelyzer.SnifferConfigure{
+		DeviceName:     deviceName,
+		SnapshotLength: 1500,
+		NicMix:         false,
+		Timeout:        -1,
+		BPFFilter:      BPFFilter,
+	}
+	go Amelyzer.StartSniffer(configure, itemsIn, detailsIn, stopSignal)
+	for {
+		var itemIn Amelyzer.PacketItem
+		var detailIn Amelyzer.PacketDetail
+		select {
+		case itemIn = <-itemsIn:
+			PacketItemPool = append(PacketItemPool, itemIn)
+			m.items = append(m.items, &PacketItemPool[len(PacketItemPool)-1])
+			m.PublishRowsReset()
+		case detailIn = <-detailsIn:
+			PacketDetailPool = append(PacketDetailPool, detailIn)
+		}
+	}
+	m.PublishRowsReset()
 }
 
 func StopSniffer(stopSignal chan bool) {
@@ -90,15 +115,28 @@ func StopSniffer(stopSignal chan bool) {
 
 func MakeUI() error {
 	var inBPFFilter *walk.LineEdit
-	var outTE *walk.TextEdit
+	var outPacketDetailLabel *walk.Label
 	var runningStateLineEdit *walk.LineEdit
 	var PacketItemTableView *walk.TableView
 	var startPushBotton *walk.PushButton
 	var stopPushBotton *walk.PushButton
+	var devicesComboBox *walk.ComboBox
+
 	var GlobalPacketItemModel = new(PacketItemModel)
 	GlobalPacketItemModel.items = make([]*Amelyzer.PacketItem, 0)
 	GlobalPacketItemModel.PublishRowsReset()
-	//var stopSnifferSignal = make(chan bool)
+
+	var stopSnifferSignal = make(chan bool)
+	var BPFFilter string = ""
+
+	var devices = Amelyzer.ListDeviceName()
+	var devicesName = make(map[string]string)
+	var devicesDescription = make([]string, 0)
+	for _, device := range devices {
+		devicesDescription = append(devicesDescription, device.Description)
+		devicesName[device.Description] = device.Name
+	}
+
 	mw := MainWindow{
 		Name:  "mainWindow", // Name is needed for settings persistence
 		Title: "Amelyzer",
@@ -114,11 +152,21 @@ func MakeUI() error {
 				Children: []Widget{
 					VSplitter{
 						Children: []Widget{
-							LineEdit{
-								AssignTo: &runningStateLineEdit,
-								Name:     "State",
-								Text:     "Not Running!",
-								Enabled:  false,
+							HSplitter{
+								Children: []Widget{
+									LineEdit{
+										AssignTo: &runningStateLineEdit,
+										Name:     "State",
+										Text:     "Not Running!",
+										Enabled:  false,
+									},
+									ComboBox{
+										AssignTo: &devicesComboBox,
+										Name:     "DevicesComboBox",
+										Editable: false,
+										Model:    devicesDescription,
+									},
+								},
 							},
 							HSplitter{
 								Children: []Widget{
@@ -132,14 +180,26 @@ func MakeUI() error {
 									},
 								},
 							},
-							PushButton{AssignTo: &startPushBotton, Name: "Start", Text: "Start", OnClicked: func() {
-								runningStateLineEdit.SetText("Sniffing...")
-								startPushBotton.SetEnabled(false)
-								stopPushBotton.SetEnabled(true)
-								//go StartSniffer(&GlobalPacketItemModel, stopSnifferSignal)
-							}},
+							PushButton{
+								AssignTo: &startPushBotton,
+								Name:     "Start",
+								Text:     "Start",
+								OnClicked: func() {
+									runningStateLineEdit.SetText("Sniffing...")
+									startPushBotton.SetEnabled(false)
+									stopPushBotton.SetEnabled(true)
+									var deviceName string
+									if devicesComboBox.Text() == "" {
+										deviceName = devicesName[devicesDescription[0]]
+
+									} else {
+										deviceName = devicesName[devicesComboBox.Text()]
+									}
+									go StartSniffer(GlobalPacketItemModel, stopSnifferSignal, deviceName, BPFFilter)
+								},
+							},
 							PushButton{AssignTo: &stopPushBotton, Name: "Stop", Text: "Stop", OnClicked: func() {
-								//go StopSniffer(stopSnifferSignal)
+								go StopSniffer(stopSnifferSignal)
 								runningStateLineEdit.SetText("Stopped...")
 								startPushBotton.SetEnabled(true)
 								stopPushBotton.SetEnabled(false)
@@ -153,14 +213,16 @@ func MakeUI() error {
 								Text:    "Choose Function",
 								Enabled: false,
 							},
-							PushButton{Name: "ApplyBPFFilter", Text: "Apply BPF Filter"},
+							PushButton{Name: "ApplyBPFFilter", Text: "Apply BPF Filter", OnClicked: func() {
+								BPFFilter = inBPFFilter.Text()
+							}},
 							PushButton{Name: "QuickFiter", Text: "Quick Filter"},
 							PushButton{Name: "Analyzer", Text: "Analyze Selected Packet"},
 						},
 					},
 				},
 			},
-			HSplitter{
+			VSplitter{
 				MinSize: Size{Height: 760},
 				Children: []Widget{
 					TableView{
@@ -170,21 +232,30 @@ func MakeUI() error {
 						ColumnsOrderable: true,
 						Columns: []TableViewColumn{
 							// Name is needed for settings persistence
-							{Name: "#", DataMember: "No."}, // Use DataMember, if names differ
+							{Name: "Number", DataMember: "No."}, // Use DataMember, if names differ
 							{Name: "Time"},
-							{Name: "Source"},
-							{Name: "Destination"},
-							{Name: "Protocol"},
 							{Name: "Length"},
-							{Name: "Info"},
+							{Name: "Source"},
+							{Name: "Target"},
+							{Name: "Protocol"},
+							{Name: "InfoShort"},
 						},
 						Model: GlobalPacketItemModel,
+						OnItemActivated: func() {
+							// Item的双击事件
+							var currentIndex = PacketItemTableView.CurrentIndex()
+							var itemNumber = GlobalPacketItemModel.items[currentIndex].Number
+							var currentDetail = PacketDetailPool[itemNumber-1]
+							var detailString = currentDetail.Layer2.Info + "\n" + currentDetail.Layer3.Info + "\n" +
+								currentDetail.Layer4.Info
+							outPacketDetailLabel.SetText(detailString)
+						},
 					},
 
-					TextEdit{
+					Label{
 						Name:     "Packet Detail",
-						AssignTo: &outTE,
-						ReadOnly: true,
+						AssignTo: &outPacketDetailLabel,
+						Text:     "Packet Details",
 					},
 				},
 			},

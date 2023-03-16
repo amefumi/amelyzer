@@ -6,8 +6,6 @@ import (
 	"time"
 )
 
-var done chan bool
-
 func main() {
 	fmt.Println(time.Now())
 	devices := Amelyzer.ListDeviceName()
