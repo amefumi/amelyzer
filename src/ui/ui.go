@@ -87,6 +87,7 @@ func StartSniffer(m *PacketItemModel, stopSignal chan bool, deviceName string, B
 	m.PublishRowsReset()
 	var itemsIn = make(chan Amelyzer.PacketItem)
 	var detailsIn = make(chan Amelyzer.PacketDetail)
+	fmt.Println(BPFFilter)
 	configure := Amelyzer.SnifferConfigure{
 		DeviceName:     deviceName,
 		SnapshotLength: 1500,
@@ -114,6 +115,7 @@ func StopSniffer(stopSignal chan bool) {
 }
 
 func MakeUI() error {
+	var mWind *walk.MainWindow
 	var inBPFFilter *walk.LineEdit
 	var outPacketDetailLabel *walk.Label
 	var outPacketDumpText *walk.TextEdit
@@ -144,8 +146,9 @@ func MakeUI() error {
 	}
 
 	mw := MainWindow{
-		Name:  "mainWindow", // Name is needed for settings persistence
-		Title: "Amelyzer",
+		AssignTo: &mWind,
+		Name:     "mainWindow", // Name is needed for settings persistence
+		Title:    "Amelyzer",
 		Layout: VBox{
 			Margins: Margins{
 				Left:   10,
@@ -250,6 +253,9 @@ func MakeUI() error {
 								Name:     "QuickFilter",
 								AssignTo: &setQuickFilterButton,
 								Text:     "Quick Filter",
+								OnClicked: func() {
+									go MakeQuickFilterUI(inBPFFilter, &BPFFilter, mWind)
+								},
 							},
 							PushButton{
 								Name:     "Analyzer",
