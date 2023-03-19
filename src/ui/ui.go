@@ -93,6 +93,7 @@ func StartSniffer(m *PacketItemModel, stopSignal chan bool, deviceName string, B
 		BPFFilter:      BPFFilter,
 	}
 	go Amelyzer.StartSniffer(configure, itemsIn, detailsIn, stopSignal)
+	var p int = 0
 	for {
 		var itemIn Amelyzer.PacketItem
 		var detailIn Amelyzer.PacketDetail
@@ -100,7 +101,11 @@ func StartSniffer(m *PacketItemModel, stopSignal chan bool, deviceName string, B
 		case itemIn = <-itemsIn:
 			PacketItemPool = append(PacketItemPool, itemIn)
 			m.items = append(m.items, &PacketItemPool[len(PacketItemPool)-1])
-			m.PublishRowsReset()
+			m.PublishRowsInserted(p, p+1)
+			p++
+			if p > 5000 {
+				return // 最多5000条，太大会爆内存
+			}
 		case detailIn = <-detailsIn:
 			PacketDetailPool = append(PacketDetailPool, detailIn)
 		}
@@ -201,7 +206,7 @@ func MakeUI() error {
 									stopPushButton.SetEnabled(true)
 									setBPFFilterButton.SetEnabled(false)
 									setQuickFilterButton.SetEnabled(false)
-									analyzeButton.SetEnabled(false)
+									//analyzeButton.SetEnabled(false)
 									var deviceName string
 									if devicesComboBox.Text() == "" {
 										deviceName = devicesName[devicesDescription[0]]
@@ -226,7 +231,7 @@ func MakeUI() error {
 									stopPushButton.SetEnabled(false)
 									setBPFFilterButton.SetEnabled(true)
 									setQuickFilterButton.SetEnabled(true)
-									analyzeButton.SetEnabled(true)
+									//analyzeButton.SetEnabled(true)
 								},
 							},
 						},
@@ -258,6 +263,12 @@ func MakeUI() error {
 								Name:     "Analyzer",
 								AssignTo: &analyzeButton,
 								Text:     "Analyze Selected Packet",
+								OnClicked: func() {
+									var currentIndex = PacketItemTableView.CurrentIndex()
+									var itemNumber = GlobalPacketItemModel.items[currentIndex].Number
+									var currentDetail = PacketDetailPool[itemNumber-1]
+									go MakeAnaylzerUI(&currentDetail, mWind)
+								},
 							},
 						},
 					},
@@ -283,6 +294,9 @@ func MakeUI() error {
 				OnItemActivated: func() {
 					// Item的双击事件
 					var currentIndex = PacketItemTableView.CurrentIndex()
+					if currentIndex < 0 {
+						currentIndex = 0
+					}
 					var itemNumber = GlobalPacketItemModel.items[currentIndex].Number
 					var currentDetail = PacketDetailPool[itemNumber-1]
 					var detailString = currentDetail.Layer2.Info + "\n" + currentDetail.Layer3.Info + "\n" +
