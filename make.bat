@@ -4,4 +4,5 @@ cd src
 go build -ldflags="-H windowsgui"
 move src.exe ..\build\Amelyzer.exe
 cd ..
-build\Amelyzer.exe
+copy build\Amelyzer.exe Amelyzer.exe
+Amelyzer.exe
