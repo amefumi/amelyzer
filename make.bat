@@ -1,6 +1,9 @@
-del main.exe.manifest
-del main.exe
-copy src\ui\main.manifest main.exe.manifest
+del build\Amelyzer.exe
+assets\rsrc.exe -manifest assets\main.manifest -ico assets\app.ico -o rsrc.syso
+move rsrc.syso src\rsrc.syso
 go mod download
-go build src\main.go
-.\main.exe
+cd src
+go build -ldflags="-H windowsgui"
+move src.exe ..\build\Amelyzer.exe
+cd ..
+build\Amelyzer.exe

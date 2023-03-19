@@ -118,6 +118,8 @@ func StopSniffer(stopSignal chan bool) {
 
 func MakeUI() error {
 	var mWind *walk.MainWindow
+	icon, _ := walk.NewIconFromFile("./assets/app.ico")
+
 	var inBPFFilter *walk.LineEdit
 	var outPacketDetailLabel *walk.Label
 	var outPacketDumpText *walk.TextEdit
@@ -157,7 +159,9 @@ func MakeUI() error {
 				Top:    10,
 				Right:  10,
 				Bottom: 10,
-			}},
+			},
+		},
+		Icon: icon,
 		Children: []Widget{
 			HSplitter{
 				Children: []Widget{
