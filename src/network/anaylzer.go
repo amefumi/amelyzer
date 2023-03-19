@@ -1,41 +1,55 @@
 package Amelyzer
 
-//
-//import (
-//	"fmt"
-//	"net"
-//	"strconv"
-//)
-//
-//func main() {
-//	// 端口号和协议类型
-//	port := 8080
-//	protocol := "tcp"
-//
-//	// 解析地址
-//	addr, err := net.ResolveTCPAddr(protocol, "localhost:"+strconv.Itoa(port))
-//	if err != nil {
-//		fmt.Println(err)
-//		return
-//	}
-//
-//	// 获取监听器
-//	lc := net.ListenConfig{}
-//	listener, err := lc.Listen(nil, addr)
-//	if err != nil {
-//		fmt.Println(err)
-//		return
-//	}
-//	defer listener.Close()
-//
-//	// 获取连接的本地地址
-//	laddr := listener.Addr().(*net.TCPAddr)
-//
-//	// 查找正在使用该端口的进程
-//	p, err := net.LookupPid("tcp", laddr.IP.String(), strconv.Itoa(laddr.Port))
-//	if err != nil {
-//		fmt.Println(err)
-//		return
-//	}
-//	fmt.Println("进程ID:", p)
-//}
+import (
+	"fmt"
+	"github.com/cakturk/go-netstat/netstat"
+)
+
+func FindUDPPort(add1 string, add2 string) (e netstat.SockTabEntry, err error) {
+	socks, err := netstat.UDPSocks(netstat.NoopFilter)
+	if err != nil {
+		return netstat.SockTabEntry{}, err
+	}
+	for _, e := range socks {
+		la := fmt.Sprint(e.LocalAddr)
+		if la == add1 || la == add2 {
+			return e, nil
+		}
+	}
+	return netstat.SockTabEntry{}, nil
+}
+
+func FindTCPPort(add1 string, add2 string) (e netstat.SockTabEntry, err error) {
+	socks, err := netstat.TCPSocks(netstat.NoopFilter)
+	if err != nil {
+		return netstat.SockTabEntry{}, err
+	}
+	for _, e := range socks {
+		la := fmt.Sprint(e.LocalAddr)
+		lr := fmt.Sprint(e.RemoteAddr)
+		if la == add1 || la == add2 || lr == add1 || lr == add2 {
+			return e, nil
+		}
+	}
+	return netstat.SockTabEntry{}, nil
+}
+
+func ProcessConnection(process string) (conns []netstat.SockTabEntry) {
+	conns = make([]netstat.SockTabEntry, 0)
+	socks, _ := netstat.UDPSocks(netstat.NoopFilter)
+	for _, e := range socks {
+		proc := fmt.Sprint(e.Process)
+		if proc == process {
+			conns = append(conns, e)
+		}
+	}
+	socks, _ = netstat.TCPSocks(netstat.NoopFilter)
+	for _, e := range socks {
+		proc := fmt.Sprint(e.Process)
+		if proc == process {
+			conns = append(conns, e)
+		}
+	}
+	return conns
+
+}

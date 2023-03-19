@@ -19,12 +19,10 @@ type PacketItemModel struct {
 var PacketDetailPool []Amelyzer.PacketDetail
 var PacketItemPool []Amelyzer.PacketItem
 
-// RowCount Called by the TableView from SetModel and every time the model publishes a RowsReset event.
 func (m *PacketItemModel) RowCount() int {
 	return len(m.items)
 }
 
-// Value Called by the TableView when it needs the text to display for a given cell.
 func (m *PacketItemModel) Value(row, col int) interface{} {
 	item := m.items[row]
 	switch col {
@@ -46,7 +44,6 @@ func (m *PacketItemModel) Value(row, col int) interface{} {
 	panic("unexpected col")
 }
 
-// Sort Called by the TableView to sort the model.
 func (m *PacketItemModel) Sort(col int, order walk.SortOrder) error {
 	m.sortColumn, m.sortOrder = col, order
 
