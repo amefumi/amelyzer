@@ -13,6 +13,26 @@ type Connection struct {
 	Process  string
 }
 
+type TCPFlow struct {
+	Addr1 string
+	Port1 uint16
+	Addr2 string
+	Port2 uint16
+}
+
+func IsSameTCPConnection(f *TCPFlow, p *PacketItem) (r bool) {
+	if p.Protocol != "TCP" && p.Protocol != "HTTP" && p.Protocol != "TLS" {
+		return false
+	}
+	if f.Addr1 == p.Source && f.Port1 == p.SourcePort && f.Addr2 == p.Target && f.Port2 == p.TargetPort {
+		return true
+	}
+	if f.Addr2 == p.Source && f.Port2 == p.SourcePort && f.Addr1 == p.Target && f.Port1 == p.TargetPort {
+		return true
+	}
+	return false
+}
+
 func FindUDPPort(add1 string, add2 string) (e netstat.SockTabEntry) {
 	socks, _ := netstat.UDPSocks(netstat.NoopFilter)
 	for _, e := range socks {

@@ -1,7 +1,8 @@
 del build\Amelyzer.exe
 go mod download
 cd src
-go build -ldflags="-H windowsgui"
+echo go build -ldflags="-H windowsgui"
+go build
 move src.exe ..\build\Amelyzer.exe
 cd ..
 copy build\Amelyzer.exe Amelyzer.exe

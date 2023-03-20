@@ -24,13 +24,15 @@ type SnifferConfigure struct {
 }
 
 type PacketItem struct {
-	Number    int
-	Time      string
-	Source    string
-	Target    string
-	Protocol  string
-	Length    int
-	InfoShort string
+	Number     int
+	Time       string
+	Source     string
+	Target     string
+	Protocol   string
+	Length     int
+	InfoShort  string
+	SourcePort uint16
+	TargetPort uint16
 }
 
 type PacketDetail struct {
@@ -237,6 +239,8 @@ func parsePacket(packet gopacket.Packet) (item PacketItem, detail PacketDetail) 
 					item.Protocol = "TCP"
 					item.InfoShort = fmt.Sprintf("%d -> %d Seq=%d [%s] Ack=%d Win=%d", tcpPacket.SrcPort,
 						tcpPacket.DstPort, tcpPacket.Seq, tcpFlagString, tcpPacket.Ack, tcpPacket.Window)
+					item.SourcePort = uint16(tcpPacket.SrcPort)
+					item.TargetPort = uint16(tcpPacket.DstPort)
 					detail.Layer4.Info = fmt.Sprintf("Transmission Control Protocol, %s\n\t Checksum: 0x%x",
 						item.InfoShort, tcpPacket.Checksum)
 					detail.Layer4.SrcPort = uint16(tcpPacket.SrcPort)

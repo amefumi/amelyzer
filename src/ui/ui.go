@@ -6,6 +6,7 @@ import (
 	"github.com/lxn/walk"
 	. "github.com/lxn/walk/declarative"
 	"sort"
+	"time"
 )
 
 type PacketItemModel struct {
@@ -18,6 +19,11 @@ type PacketItemModel struct {
 
 var PacketDetailPool []Amelyzer.PacketDetail
 var PacketItemPool []Amelyzer.PacketItem
+
+var TCPTraced Amelyzer.TCPFlow
+
+// TableViewStage  0:正常更新 1:需要先根据TCPTraced进行已有内容过滤 2:只展示TCPTraced内容 3:进行所有内容还原
+var TableViewStage = 0
 
 func (m *PacketItemModel) RowCount() int {
 	return len(m.items)
@@ -77,6 +83,16 @@ func (m *PacketItemModel) Sort(col int, order walk.SortOrder) error {
 	return m.SorterBase.Sort(col, order)
 }
 
+var hb chan bool
+var hbs bool
+
+func HeartBeat() {
+	hb <- true
+	if hbs == true {
+		time.AfterFunc(1*time.Second, HeartBeat)
+	}
+}
+
 func StartSniffer(m *PacketItemModel, stopSignal chan bool, deviceName string, BPFFilter string) {
 	PacketDetailPool = make([]Amelyzer.PacketDetail, 0)
 	PacketItemPool = make([]Amelyzer.PacketItem, 0)
@@ -92,22 +108,80 @@ func StartSniffer(m *PacketItemModel, stopSignal chan bool, deviceName string, B
 		Timeout:        -1,
 		BPFFilter:      BPFFilter,
 	}
-	go Amelyzer.StartSniffer(configure, itemsIn, detailsIn, stopSignal)
+	var stopSignal1 chan bool
+	go Amelyzer.StartSniffer(configure, itemsIn, detailsIn, stopSignal1)
 	var p int = 0
+	hbs = true
+	go HeartBeat()
 	for {
 		var itemIn Amelyzer.PacketItem
 		var detailIn Amelyzer.PacketDetail
+		var heartBeat bool
+		var stop bool
 		select {
+		case stop = <-stopSignal:
+			stopSignal1 <- stop
+			hbs = false
+			return
 		case itemIn = <-itemsIn:
-			PacketItemPool = append(PacketItemPool, itemIn)
-			m.items = append(m.items, &PacketItemPool[len(PacketItemPool)-1])
-			m.PublishRowsInserted(p, p+1)
-			p++
-			if p > 5000 {
-				return // 最多5000条，太大会爆内存
+			if itemIn.Number < 0 {
+				continue
 			}
+			PacketItemPool = append(PacketItemPool, itemIn) // 同一次嗅探中不能改变PacketItemPool和PacketDetailPool的加入逻辑
+			if TableViewStage == 0 {
+				m.items = append(m.items, &PacketItemPool[len(PacketItemPool)-1])
+				m.PublishRowsInserted(p, p+1)
+				p++
+				if p > 5000 {
+					return // 最多5000条，太大会爆内存
+				}
+			} else if TableViewStage == 1 {
+				m.items = make([]*Amelyzer.PacketItem, 0) // 新建一个m
+				fmt.Println("Enter Stage 1")
+				for i, _ := range PacketItemPool {
+					p = 0
+					if Amelyzer.IsSameTCPConnection(&TCPTraced, &PacketItemPool[i]) {
+						m.items = append(m.items, &PacketItemPool[i])
+						m.PublishRowsInserted(p, p+1)
+						p++ // 逻辑上这里p不会大于5000
+					}
+				}
+				TableViewStage = 2
+				fmt.Println("Exit Stage 1")
+			} else if TableViewStage == 2 {
+				fmt.Println("Enter Stage 2")
+				if Amelyzer.IsSameTCPConnection(&TCPTraced, &PacketItemPool[len(PacketItemPool)-1]) {
+					m.items = append(m.items, &PacketItemPool[len(PacketItemPool)-1])
+					m.PublishRowsInserted(p, p+1)
+					p++
+					if p > 5000 {
+						return
+					}
+				}
+				fmt.Println("Exit Stage 2")
+			} else if TableViewStage == 3 {
+				fmt.Println("Enter Stage 3")
+				m.items = make([]*Amelyzer.PacketItem, 0) // 新建一个m
+				for i, _ := range PacketItemPool {
+					p = 0
+					m.items = append(m.items, &PacketItemPool[i])
+					m.PublishRowsInserted(p, p+1)
+					p++ // 逻辑上这里p不会大于5000
+					if p > 5000 {
+						return
+					}
+				}
+				TableViewStage = 0
+				fmt.Println("Exit Stage 3")
+			}
+
 		case detailIn = <-detailsIn:
 			PacketDetailPool = append(PacketDetailPool, detailIn)
+		case heartBeat = <-hb:
+			fmt.Println("HeartBeat:", heartBeat)
+			itemsIn <- Amelyzer.PacketItem{
+				Number: -1,
+			}
 		}
 	}
 }
@@ -131,6 +205,7 @@ func MakeUI() error {
 	var setBPFFilterButton *walk.PushButton
 	var setQuickFilterButton *walk.PushButton
 	var analyzeButton *walk.PushButton
+	var tcpTrackButton *walk.PushButton
 
 	var devicesComboBox *walk.ComboBox
 
@@ -242,10 +317,33 @@ func MakeUI() error {
 					},
 					VSplitter{
 						Children: []Widget{
-							LineEdit{
-								Name:    "Tips",
-								Text:    "Choose Function",
-								Enabled: false,
+							PushButton{
+								Name:     "TCPTrack",
+								AssignTo: &tcpTrackButton,
+								Text:     "Track Current TCP Flow",
+								OnClicked: func() {
+									if TableViewStage == 0 {
+										var currentIndex = PacketItemTableView.CurrentIndex()
+										var itemNumber = GlobalPacketItemModel.items[currentIndex].Number
+										var currentDetail = PacketDetailPool[itemNumber-1]
+										if currentDetail.Layer4.Protocol != "TCP" {
+											walk.MsgBox(mWind, "Flow Track Error", fmt.Sprintf("Protocol %s Track Unaccess.",
+												currentDetail.Layer4.Protocol), walk.MsgBoxIconError)
+										} else {
+											TCPTraced = Amelyzer.TCPFlow{
+												Addr1: currentDetail.Layer3.Src,
+												Port1: currentDetail.Layer4.SrcPort,
+												Addr2: currentDetail.Layer3.Dst,
+												Port2: currentDetail.Layer4.DstPort,
+											}
+											TableViewStage = 1
+											tcpTrackButton.SetText("Stop TCP Track")
+										}
+									} else {
+										TableViewStage = 3
+										tcpTrackButton.SetText("Track Current TCP Flow")
+									}
+								},
 							},
 							PushButton{
 								Name:     "ApplyBPFFilter",
